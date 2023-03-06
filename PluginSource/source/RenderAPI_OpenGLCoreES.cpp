@@ -82,7 +82,7 @@ public:
 
 	virtual bool GetUsesReverseZ() { return false; }
 
-	virtual void DrawSimpleTriangles(const float worldMatrix[16], int triangleCount, const void* verticesFloat3Byte4);
+	virtual void DrawSimpleTriangles(const float worldMatrix[16], int triangleCount, const void* verticesFloat3Byte4, const float cropPos[6]);
 
 	virtual void* BeginModifyTexture(void* textureHandle, int textureWidth, int textureHeight, int* outRowPitch);
 	virtual void EndModifyTexture(void* textureHandle, int textureWidth, int textureHeight, int rowPitch, void* dataPtr);
@@ -427,12 +427,12 @@ void RenderAPI_OpenGLCoreES::ProcessDeviceEvent(UnityGfxDeviceEventType type, IU
 	else if (type == kUnityGfxDeviceEventShutdown)
 	{
 		//@TODO: release resources
-		// stopFrameThread();
+		stopFrameThread();
 	}
 }
 
 
-void RenderAPI_OpenGLCoreES::DrawSimpleTriangles(const float worldMatrix[16], int triangleCount, const void* verticesFloat3Byte4)
+void RenderAPI_OpenGLCoreES::DrawSimpleTriangles(const float worldMatrix[16], int triangleCount, const void* verticesFloat3Byte4, const float cropPos[6])
 {
 
 	cnt += 1;
@@ -443,6 +443,9 @@ void RenderAPI_OpenGLCoreES::DrawSimpleTriangles(const float worldMatrix[16], in
 	glEnable(GL_DEPTH_TEST);
 	glEnable(GL_TEXTURE_2D);
 	glDepthMask(GL_FALSE);
+
+
+	LOGD("cropPos[0]: %f\n", cropPos[0]);
 
 	// Tweak the projection matrix a bit to make it match what identity projection would do in D3D case.
 	float projectionMatrix[16] = {

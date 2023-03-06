@@ -12,8 +12,15 @@
 // SetTimeFromUnity, an example function we export which is called by one of the scripts.
 
 static float g_Time;
+static float g_croppos[6];
 
 extern "C" void UNITY_INTERFACE_EXPORT UNITY_INTERFACE_API SetTimeFromUnity (float t) { g_Time = t; }
+
+extern "C" void UNITY_INTERFACE_EXPORT UNITY_INTERFACE_API SetCropPosFromUnity (float pos[6]) { 
+	for(int i = 0; i < 6; ++i) {
+		g_croppos[i] = pos[i];
+	}
+ }
 
 
 
@@ -211,7 +218,12 @@ static void DrawColoredTriangle()
 		0,0,finalDepth,1,
 	};
 
-	s_CurrentAPI->DrawSimpleTriangles(worldMatrix, 1, verts);
+	float pos[6] = {};
+	for(int i = 0; i < 6; ++i){
+		pos[i] = g_croppos[i];
+	}
+
+	s_CurrentAPI->DrawSimpleTriangles(worldMatrix, 1, verts, pos);
 }
 
 

@@ -18,6 +18,14 @@ public class UseRenderingPlugin : MonoBehaviour
 	[DllImport ("RenderingPlugin")]
 #endif
 	private static extern void SetTimeFromUnity(float t);
+	
+
+#if (UNITY_IOS || UNITY_TVOS || UNITY_WEBGL) && !UNITY_EDITOR
+	[DllImport ("__Internal")]
+#else
+	[DllImport ("RenderingPlugin")]
+#endif
+	private static extern void SetCropPosFromUnity(float[] p);
 
 
 	// We'll also pass native pointer to a texture in Unity.
@@ -63,6 +71,7 @@ public class UseRenderingPlugin : MonoBehaviour
 
 	private void CreateTextureAndPassToPlugin()
 	{
+		Debug.Log("Start CreateTextureAndPassToPlugin ");
 		// Create a texture
 		Texture2D tex = new Texture2D(256,256,TextureFormat.ARGB32,false);
 		// Set point filtering just so we can see the pixels clearly
@@ -114,12 +123,21 @@ public class UseRenderingPlugin : MonoBehaviour
 
 	private IEnumerator CallPluginAtEndOfFrames()
 	{
+		float[] pos = {1, 0, 0, 0, 0, 0};
 		while (true) {
 			// Wait until all frame rendering is done
 			yield return new WaitForEndOfFrame();
 
 			// Set time for the plugin
 			SetTimeFromUnity (Time.timeSinceLevelLoad);
+
+			pos[0] = Time.timeSinceLevelLoad;
+			SetCropPosFromUnity(pos);
+
+			// TODO: get new fram from another thread
+			// 在渲染线程中更新一个常量
+			// GetDataFromThread();
+
 
 			// Issue a plugin event with arbitrary integer identifier.
 			// The plugin can distinguish between different
