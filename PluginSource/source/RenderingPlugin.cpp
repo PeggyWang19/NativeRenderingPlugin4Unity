@@ -173,16 +173,29 @@ static void DrawColoredTriangle()
 	// Draw a colored triangle. Note that colors will come out differently
 	// in D3D and OpenGL, for example, since they expect color bytes
 	// in different ordering.
+	// struct MyVertex
+	// {
+	// 	float x, y, z;
+	// 	unsigned int color;	// ABGR
+	// };
+	// MyVertex verts[3] =
+	// {
+	// 	{ -0.5f, -0.25f,  0.0f, 0xFFff0000},
+	// 	{ 0.5f,  -0.25f,  0.0f, 0xFF00ff00},
+	// 	{ 0.0f,    0.5f , 0.0f, 0xFF0000ff},
+	// };
+	
 	struct MyVertex
 	{
 		float x, y, z;
-		unsigned int color;
+		unsigned int color;	// ABGR
+		float tx, ty;	// texture coordinate
 	};
 	MyVertex verts[3] =
 	{
-		{ -0.5f, -0.25f,  0, 0xFFff0000 },
-		{ 0.5f, -0.25f,  0, 0xFF00ff00 },
-		{ 0,     0.5f ,  0, 0xFF0000ff },
+		{ -0.5f, -0.25f,  0.0f, 0xFFff0000 , 0.0f, 0.0f},
+		{ 0.5f,  -0.25f,  0.0f, 0xFF00ff00 , 1.0f, 0.0f},
+		{ 0.0f,    0.5f , 0.0f, 0xFF0000ff , 0.5f, 1.0f},
 	};
 
 	// Transformation matrix: rotate around Z axis based on time.
@@ -294,6 +307,7 @@ static void UNITY_INTERFACE_API OnRenderEvent(int eventID)
 
 	DrawColoredTriangle();
 	ModifyTexturePixels();
+	// vertexBuffer关联unity的mesh
 	ModifyVertexBuffer();
 }
 

@@ -62,8 +62,12 @@ private:
 	GLuint m_Program;
 	GLuint m_VertexArray;
 	GLuint m_VertexBuffer;
+	GLuint m_Texture;
 	int m_UniformWorldMatrix;
 	int m_UniformProjMatrix;
+	int m_UniformTexture;
+
+	int cnt;
 };
 
 
@@ -76,17 +80,36 @@ RenderAPI* CreateRenderAPI_OpenGLCoreES(UnityGfxRenderer apiType)
 enum VertexInputs
 {
 	kVertexInputPosition = 0,
-	kVertexInputColor = 1
+	kVertexInputColor = 1,
+	kVertexInputTexture = 2
 };
 
 
 // Simple vertex shader source
+// #define VERTEX_SHADER_SRC(ver, attr, varying)						\
+// 	ver																\
+// 	attr " highp vec3 pos;\n"										\
+// 	attr " lowp vec4 color;\n"										\
+// 	"\n"															\
+// 	varying " lowp vec4 ocolor;\n"									\
+// 	"\n"															\
+// 	"uniform highp mat4 worldMatrix;\n"								\
+// 	"uniform highp mat4 projMatrix;\n"								\
+// 	"\n"															\
+// 	"void main()\n"													\
+// 	"{\n"															\
+// 	"	gl_Position = (projMatrix * worldMatrix) * vec4(pos,1);\n"	\
+// 	"	ocolor = color;\n"											\
+// 	"}\n"															\
+
 #define VERTEX_SHADER_SRC(ver, attr, varying)						\
 	ver																\
 	attr " highp vec3 pos;\n"										\
 	attr " lowp vec4 color;\n"										\
+	attr " highp vec2 texCoord;\n"									\
 	"\n"															\
 	varying " lowp vec4 ocolor;\n"									\
+	varying " highp vec2 TexCoord;\n"								\
 	"\n"															\
 	"uniform highp mat4 worldMatrix;\n"								\
 	"uniform highp mat4 projMatrix;\n"								\
@@ -95,6 +118,7 @@ enum VertexInputs
 	"{\n"															\
 	"	gl_Position = (projMatrix * worldMatrix) * vec4(pos,1);\n"	\
 	"	ocolor = color;\n"											\
+	"	TexCoord = vec2(texCoord.x, texCoord.y);\n"										\
 	"}\n"															\
 
 static const char* kGlesVProgTextGLES2 = VERTEX_SHADER_SRC("\n", "attribute", "varying");
@@ -107,14 +131,28 @@ static const char* kGlesVProgTextGLCore = VERTEX_SHADER_SRC("#version 150\n", "i
 
 
 // Simple fragment shader source
+
+// #define FRAGMENT_SHADER_SRC(ver, varying, outDecl, outVar)	\
+// 	ver												\
+// 	outDecl											\
+// 	varying " lowp vec4 ocolor;\n"					\
+// 	"\n"											\
+// 	"void main()\n"									\
+// 	"{\n"											\
+// 	"	" outVar " = ocolor;\n"\
+// 	"}\n"											\
+
+
 #define FRAGMENT_SHADER_SRC(ver, varying, outDecl, outVar)	\
 	ver												\
 	outDecl											\
 	varying " lowp vec4 ocolor;\n"					\
+	varying " highp vec2 TexCoord;\n"				\
+	"uniform lowp sampler2D outTexture;\n" 			\
 	"\n"											\
 	"void main()\n"									\
 	"{\n"											\
-	"	" outVar " = ocolor;\n"						\
+	"	" outVar " = texture(outTexture, TexCoord);\n"\
 	"}\n"											\
 
 static const char* kGlesFShaderTextGLES2 = FRAGMENT_SHADER_SRC("\n", "varying", "\n", "gl_FragColor");
@@ -168,6 +206,7 @@ void RenderAPI_OpenGLCoreES::CreateResources()
 	m_Program = glCreateProgram();
 	glBindAttribLocation(m_Program, kVertexInputPosition, "pos");
 	glBindAttribLocation(m_Program, kVertexInputColor, "color");
+	glBindAttribLocation(m_Program, kVertexInputTexture, "texCoord");
 	glAttachShader(m_Program, m_VertexShader);
 	glAttachShader(m_Program, m_FragmentShader);
 #	if SUPPORT_OPENGL_CORE
@@ -183,10 +222,37 @@ void RenderAPI_OpenGLCoreES::CreateResources()
 	m_UniformWorldMatrix = glGetUniformLocation(m_Program, "worldMatrix");
 	m_UniformProjMatrix = glGetUniformLocation(m_Program, "projMatrix");
 
+	m_UniformTexture = glGetUniformLocation(m_Program, "outTexture");
+
 	// Create vertex buffer
 	glGenBuffers(1, &m_VertexBuffer);
 	glBindBuffer(GL_ARRAY_BUFFER, m_VertexBuffer);
+	// 认为1024开的足够大了
 	glBufferData(GL_ARRAY_BUFFER, 1024, NULL, GL_STREAM_DRAW);
+
+
+	// Create texture
+	glGenTextures(1, &m_Texture);
+	glBindTexture(GL_TEXTURE_2D, m_Texture);
+	// set parameters for wrapping/filtering
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+	unsigned char *texture_data = new unsigned char[200*200*3];
+	for(int i = 0; i < 200*200*3 ; i = i + 3){
+		texture_data[i] = 0x00;
+		texture_data[i + 1] = 0xff;
+		texture_data[i + 2] = 0x00;
+	}
+
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 200, 200, 0, GL_RGB, GL_UNSIGNED_BYTE, texture_data);
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+
+	delete []texture_data;
+
 
 	assert(glGetError() == GL_NO_ERROR);
 }
@@ -213,11 +279,14 @@ void RenderAPI_OpenGLCoreES::ProcessDeviceEvent(UnityGfxDeviceEventType type, IU
 
 void RenderAPI_OpenGLCoreES::DrawSimpleTriangles(const float worldMatrix[16], int triangleCount, const void* verticesFloat3Byte4)
 {
+
+	cnt += 1;
 	// Set basic render state
 	glDisable(GL_CULL_FACE);
 	glDisable(GL_BLEND);
 	glDepthFunc(GL_LEQUAL);
 	glEnable(GL_DEPTH_TEST);
+	glEnable(GL_TEXTURE_2D);
 	glDepthMask(GL_FALSE);
 
 	// Tweak the projection matrix a bit to make it match what identity projection would do in D3D case.
@@ -243,7 +312,9 @@ void RenderAPI_OpenGLCoreES::DrawSimpleTriangles(const float worldMatrix[16], in
 #	endif // if SUPPORT_OPENGL_CORE
 
 	// Bind a vertex buffer, and update data in it
-	const int kVertexSize = 12 + 4;
+	const int kVertexSize = 12 + 4 + 8;
+	// const int kVertexSize = sizeof(verticesFloat3Byte4) / triangleCount;
+	// const int kVertexSize = 12 + 4;
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 	glBindBuffer(GL_ARRAY_BUFFER, m_VertexBuffer);
 	glBufferSubData(GL_ARRAY_BUFFER, 0, kVertexSize * triangleCount * 3, verticesFloat3Byte4);
@@ -253,9 +324,43 @@ void RenderAPI_OpenGLCoreES::DrawSimpleTriangles(const float worldMatrix[16], in
 	glVertexAttribPointer(kVertexInputPosition, 3, GL_FLOAT, GL_FALSE, kVertexSize, (char*)NULL + 0);
 	glEnableVertexAttribArray(kVertexInputColor);
 	glVertexAttribPointer(kVertexInputColor, 4, GL_UNSIGNED_BYTE, GL_TRUE, kVertexSize, (char*)NULL + 12);
+	glEnableVertexAttribArray(kVertexInputTexture);
+	glVertexAttribPointer(kVertexInputTexture, 2, GL_FLOAT, GL_FALSE, kVertexSize, (char*)NULL + 12 + 4);
+
+
+
+	// Bind Texture and set texture
+	int width = 200;
+	int height = 240;
+	char* data = new char[width*height*3];
+	for(int i = 0; i < width*height; ++i) {
+		data[i * 3] = 0xff;
+		data[i * 3 + 1] = 0x00;
+		data[i * 3 + 2] = 0x00;
+	}
+
+	if(cnt % 100){
+		for(int i = 0; i < width*height; ++i) {
+		data[i * 3] = 0xff;
+		data[i * 3 + 1] = 0x00;
+		data[i * 3 + 2] = 0xff;
+	}
+	}
+
+	glBindTexture(GL_TEXTURE_2D, m_Texture);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+	glGenerateMipmap(GL_TEXTURE_2D);
+
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, m_Texture);
+	glUniform1i(m_UniformTexture, 0);
 
 	// Draw
 	glDrawArrays(GL_TRIANGLES, 0, triangleCount * 3);
+
+
+	delete []data;
+	glBindTexture(GL_TEXTURE_2D, 0);
 
 	// Cleanup VAO
 #	if SUPPORT_OPENGL_CORE
