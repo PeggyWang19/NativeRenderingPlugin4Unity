@@ -4,6 +4,27 @@
 // OpenGL Core profile (desktop) or OpenGL ES (mobile) implementation of RenderAPI.
 // Supports several flavors: Core, ES2, ES3
 
+#include <queue>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <iostream>
+
+#include <android/log.h>
+#define DEBUG 1 //日志开关，1为开，其它为关
+#if(DEBUG==1)
+#define LOG_TAG "OPENGLES_JNI"
+#define LOGV(...) __android_log_print(ANDROID_LOG_VERBOSE,TAG,__VA_ARGS__)
+#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#else
+#define LOGV(...) NULL
+#define LOGD(...) NULL
+#define LOGI(...) NULL
+#define LOGE(...) NULL
+#endif 
+
 
 #if SUPPORT_OPENGL_UNIFIED
 
@@ -34,6 +55,23 @@
 #endif
 
 
+// Frame for rendering
+class Frame {
+	public:
+	double pts;
+	unsigned char *data;
+
+	public:
+	Frame(double t, unsigned char *d) {
+		pts = t;
+		data = d;
+	}
+
+	~Frame() {
+		delete []data;
+	}
+};
+
 class RenderAPI_OpenGLCoreES : public RenderAPI
 {
 public:
@@ -54,6 +92,13 @@ public:
 
 private:
 	void CreateResources();
+	
+	// thread refresh texture image
+	void initFrameThread();
+	void runFrameThread();
+	Frame *getFrameFromThread();
+	void stopFrameThread();
+
 
 private:
 	UnityGfxRenderer m_APIType;
@@ -68,6 +113,17 @@ private:
 	int m_UniformTexture;
 
 	int cnt;
+
+public:
+	// thread for image transmission
+	std::thread * m_thread;
+	std::mutex m_mtx;
+	std::condition_variable m_con_full;
+	std::condition_variable m_con_empty;
+	std::queue<Frame *> m_buffer;
+	int state = 0;
+	int data_width;
+	int data_height;
 };
 
 
@@ -257,6 +313,102 @@ void RenderAPI_OpenGLCoreES::CreateResources()
 	assert(glGetError() == GL_NO_ERROR);
 }
 
+void generateFrame_thread(RenderAPI_OpenGLCoreES * glapi) {
+	bool running = glapi->state;
+	int cnt = 0;
+	int size;
+	unsigned char *data;
+	Frame *f;
+
+	int d_width = glapi->data_width;
+	int d_height = glapi->data_height;
+	int MAX_BUFFER_SIZE = 20;
+
+	LOGD("frame thread start: d_width %d, d_height %d\n", d_width, d_height);
+
+
+	while(running) {
+		cnt += 1;
+
+		// test: refresh color every 60 rounds
+		// generate new texture and free it when used in glDraw()
+		data = new unsigned char[d_width * d_height * 3];
+		if(cnt % 60 < 30) {
+			for(int i = 0; i < d_width * d_height; ++i) {
+				data[i * 3] = 0xff;
+				data[i * 3 + 1] = 0;
+				data[i * 3 + 2] = 0;
+			}
+		}
+		else {
+			for(int i = 0; i < d_width * d_height; i = ++i) {
+				data[i * 3] = 0xff;
+				data[i * 3 + 1] = 0xff;
+				data[i * 3 + 2] = 0;
+			}
+		}
+
+		LOGD("data addr: %x\n", data);
+
+		f = new Frame(cnt, data);
+
+		std::unique_lock<std::mutex> locker(glapi->m_mtx);
+		while(glapi->m_buffer.size() == MAX_BUFFER_SIZE) {
+			// unlock m_mtx and wait to be notified
+			glapi->m_con_full.wait(locker);
+		}
+		glapi->m_buffer.push(f);
+		glapi->m_con_empty.notify_all();
+		locker.unlock();
+
+	}
+}
+
+
+void RenderAPI_OpenGLCoreES::initFrameThread() {
+
+	data_width = 200;
+	data_height = 200;
+	state = 1;
+
+}
+
+void RenderAPI_OpenGLCoreES::runFrameThread()
+{
+    // start the image transmission thread
+	m_thread = new std::thread(generateFrame_thread, this);
+}
+
+void RenderAPI_OpenGLCoreES::stopFrameThread() {
+
+	// end the image transmission thread
+	Frame *f;
+	while(!m_buffer.empty()) {
+		f = m_buffer.front();
+		m_buffer.pop();
+		delete f;
+	}
+	m_thread->join();
+}
+
+Frame *RenderAPI_OpenGLCoreES::getFrameFromThread() {
+	Frame *f;
+	
+	std::unique_lock<std::mutex> locker(m_mtx);
+	while(m_buffer.size() == 0) {
+		// unlock m_mtx and wait to be notified
+		m_con_empty.wait(locker);
+	}
+	f = m_buffer.front();
+	m_buffer.pop();
+	LOGD("getFrameFromThread m_buffer size: %d\n", m_buffer.size());
+	m_con_full.notify_all();
+	locker.unlock();
+
+	return f;
+}
+
+
 
 RenderAPI_OpenGLCoreES::RenderAPI_OpenGLCoreES(UnityGfxRenderer apiType)
 	: m_APIType(apiType)
@@ -269,10 +421,13 @@ void RenderAPI_OpenGLCoreES::ProcessDeviceEvent(UnityGfxDeviceEventType type, IU
 	if (type == kUnityGfxDeviceEventInitialize)
 	{
 		CreateResources();
+		initFrameThread();
+		runFrameThread();
 	}
 	else if (type == kUnityGfxDeviceEventShutdown)
 	{
 		//@TODO: release resources
+		// stopFrameThread();
 	}
 }
 
@@ -330,25 +485,28 @@ void RenderAPI_OpenGLCoreES::DrawSimpleTriangles(const float worldMatrix[16], in
 
 
 	// Bind Texture and set texture
-	int width = 200;
-	int height = 240;
-	char* data = new char[width*height*3];
-	for(int i = 0; i < width*height; ++i) {
-		data[i * 3] = 0xff;
-		data[i * 3 + 1] = 0x00;
-		data[i * 3 + 2] = 0x00;
-	}
+	// int width = 200;
+	// int height = 240;
+	// char* data = new char[width*height*3];
+	// for(int i = 0; i < width*height; ++i) {
+	// 	data[i * 3] = 0xff;
+	// 	data[i * 3 + 1] = 0x00;
+	// 	data[i * 3 + 2] = 0x00;
+	// }
 
-	if(cnt % 100){
-		for(int i = 0; i < width*height; ++i) {
-		data[i * 3] = 0xff;
-		data[i * 3 + 1] = 0x00;
-		data[i * 3 + 2] = 0xff;
-	}
-	}
+	// if(cnt % 100 == 0){
+	// 	for(int i = 0; i < width*height; ++i) {
+	// 		data[i * 3] = 0xff;
+	// 		data[i * 3 + 1] = 0x00;
+	// 		data[i * 3 + 2] = 0xff;
+	// 	}
+	// }
+
+	Frame *f = getFrameFromThread();
+	LOGD("draw frame NO.%f\n", f->pts);
 
 	glBindTexture(GL_TEXTURE_2D, m_Texture);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, data_width, data_height, 0, GL_RGB, GL_UNSIGNED_BYTE, f->data);
 	glGenerateMipmap(GL_TEXTURE_2D);
 
 	glActiveTexture(GL_TEXTURE0);
@@ -359,7 +517,7 @@ void RenderAPI_OpenGLCoreES::DrawSimpleTriangles(const float worldMatrix[16], in
 	glDrawArrays(GL_TRIANGLES, 0, triangleCount * 3);
 
 
-	delete []data;
+	delete f;
 	glBindTexture(GL_TEXTURE_2D, 0);
 
 	// Cleanup VAO
